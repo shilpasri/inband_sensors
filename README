@@ -1,0 +1,51 @@
+Openpower based Inband OCC sensors
+===================================
+
+In POWER8, OCC (On-Chip-Controller) periodically  reads various
+sensors related to power, temperature, CPU frequency, CPU utilization,
+memory bandwidth etc., These sensor data is stored in OCC's SRAM and
+is available to user via 'ipmitool sdr' and AMESTER. Currently AMESTER
+is available only out-of-band and ipmitool is slow and not favourable
+for profiling. So this method provides a faster inband sensing
+mechanism from linux kernel to read sensors and profile workloads at
+sub-millisecond granularity.
+
+Inband OCC sensor requires the below firmware changes:
+1) OCC changes to write the sensor data periodically to main memory.
+	https://github.com/shilpasri/occ/tree/inband-sensors
+2) Skiboot changes to export this memory mapped sensor data as DT
+entries to kernel.
+	https://github.com/shilpasri/skiboot/tree/inband-sensors
+3) Kernel requirements:
+   - Latest upstream kernel with ibmpowernv.ko
+     (hwmon driver CONFIG_SENSORS_IBMPOWERNV)
+   - Custom driver https://github.com/shilpasri/inband_sensors.git
+
+Steps to build a PNOR image for inband-occ-sensors
+===================================================
+git clone --recursive https://github.com/shilpasri/op-build.git
+cd op-build
+git checkout -b inband_sensors origin/inband_sensors
+. op-build-env
+op-build palmetto_defconfig && op-build
+
+Reading the inband-occ-sensors
+==============================
+* Using lm-sensors to read the power numbers. Load the platfrom hwmon
+  module ibmpowernv.ko.
+  # sensors | grep power1
+  power1:      424.00 W
+
+* Using custom driver to read the sensors, this driver will export the
+  sensors to sysfs path /sys/devices/system/cpu/occ_sensors/
+  # cd /sys/devices/system/cpu/occ_sensors/
+  # ls
+  chip0  system
+  # ls *
+  chip0:
+  chip-energy  chip-mbw  core1-temp  core2-temp  core3-temp
+  core4-temp  core5-temp  core6-temp  core7-temp  core8-temp  power
+  power-memory  power-vcs  power-vdd
+  system:
+  ambient-temperature  count  fan-power  fan-speed  gpu-power
+  io-power  power  storage-power  system-energy
