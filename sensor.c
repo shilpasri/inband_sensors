@@ -62,7 +62,7 @@ static struct attribute_group system_attr_group = {
 static struct attribute_group **chip_attr_group;
 struct kobject *occ_sensor_kobj;
 
-unsigned int be_to_cpu(u64 addr, u32 size)
+unsigned long be_to_cpu(u64 addr, u32 size)
 {
 	switch (size) {
 	case 16:
@@ -80,7 +80,7 @@ static ssize_t sensor_attr_show(struct device *dev,
 {
 	sensor_t *sensor = container_of(attr, sensor_t, attr);
 
-	return sprintf(buf, "%u %s\n", BE(sensor->vaddr, sensor->size),
+	return sprintf(buf, "%lu %s\n", BE(sensor->vaddr, sensor->size),
 		       sensor->unit);
 }
 
@@ -96,7 +96,7 @@ do {									   \
 		pr_info("%s node cannot read unit\n", node->name);	   \
 	}								   \
 	var.vaddr = (u64)phys_to_virt(var.paddr);			   \
-	pr_info("Sensor : %s *(%lx) = %d\n", node->name,		   \
+	pr_info("Sensor : %s *(%lx) = %lu\n", node->name,		   \
 		(unsigned long)var.vaddr, BE(var.vaddr, var.size));	   \
 	var.attr.attr.mode = S_IRUGO;					   \
 	var.attr.show = sensor_attr_show;				   \
@@ -172,7 +172,7 @@ static int add_chip_sensor(struct device_node *chip_node)
 	}
 
 	chips[i].vbase = (u64)phys_to_virt(chips[i].pbase);
-	pr_info("i = %d Chip %d sensor pbase= %lx, vbase = %lx (%x)\n", i,
+	pr_info("i = %d Chip %d sensor pbase= %lx, vbase = %lx (%lx)\n", i,
 		 chips[i].id, (unsigned long)chips[i].pbase,
 		 (unsigned long)chips[i].vbase, BE(chips[i].vbase+4, 16));
 
