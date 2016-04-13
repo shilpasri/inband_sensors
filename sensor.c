@@ -18,6 +18,8 @@
 #include <linux/io.h>
 #include <linux/perf_event.h>
 
+#include <asm/cputhreads.h>
+
 #define BE(x, s)	be_to_cpu(x, s)
 
 typedef struct sensor {
@@ -36,6 +38,7 @@ typedef struct core {
 struct chip {
 	int id;
 	char name[30];
+	int nr_cores;
 	u64 pbase;
 	u64 vbase;
 	sensor_t *sensors;
@@ -45,7 +48,7 @@ struct chip {
 sensor_t *system_sensors;
 
 static unsigned int nr_chips, nr_system_sensors, nr_chip_sensors;
-static unsigned int nr_cores_sensors, nr_cores;
+static unsigned int nr_cores_sensors;
 static u64 power_addr;
 static u64 chip_power_addr;
 static u64 chip_energy_addr;
@@ -219,8 +222,15 @@ static int init_chip(void)
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < nr_chips; i++)
+	for (i = 0; i < nr_chips; i++) {
+		int ncpus = 0;
+
 		chips[i].id = chip[i];
+		for_each_possible_cpu(cpu)
+			if (chips[i].id == cpu_to_chip_id(cpu))
+				ncpus++;
+		chips[i].nr_cores = ncpus / threads_per_core;
+	}
 
 	sensor_node = of_find_node_by_path("/occ_sensors");
 
@@ -241,14 +251,13 @@ static int init_chip(void)
 		return -EINVAL;
 	}
 
-	nr_cores = cpumask_weight(cpu_present_mask)/(8 * nr_chips);
 	system_sensors = kcalloc(nr_system_sensors, sizeof(sensor_t),
 				 GFP_KERNEL);
 	for (i = 0; i < nr_chips; i++) {
 		chips[i].sensors = kcalloc(nr_chip_sensors, sizeof(sensor_t),
 					   GFP_KERNEL);
-		chips[i].cores = kcalloc(nr_cores, sizeof(core_t), GFP_KERNEL);
-		for (j = 0; j < nr_cores; j++)
+		chips[i].cores = kcalloc(chips[i].nr_cores, sizeof(core_t), GFP_KERNEL);
+		for (j = 0; j < chips[i].nr_cores; j++)
 			chips[i].cores[j].sensors = kcalloc(nr_cores_sensors,
 							    sizeof(sensor_t),
 							    GFP_KERNEL);
@@ -269,7 +278,7 @@ static int init_chip(void)
 			     GFP_KERNEL);
 	for (i = 0; i < nr_chips; i++)
 		chip_attrs[i] = kcalloc(
-				nr_chip_sensors + nr_cores_sensors * nr_cores,
+				nr_chip_sensors + nr_cores_sensors * chips[i].nr_cores,
 				sizeof(struct attribute *), GFP_KERNEL);
 
 	for (i = 0; i < nr_system_sensors; i++)
@@ -280,7 +289,7 @@ static int init_chip(void)
 		i = 0;
 		for (k = 0; k < nr_chip_sensors; k++, i++)
 			chip_attrs[j][i] = &chips[j].sensors[k].attr.attr;
-		for (k = 0; k < nr_cores; k++)
+		for (k = 0; k < chips[j].nr_cores; k++)
 			for (l = 0; l < nr_cores_sensors; l++, i++)
 				chip_attrs[j][i] =
 					&chips[j].cores[k].sensors[l].attr.attr;
@@ -344,7 +353,7 @@ static void sensor_exit(void)
 		kfree(chip_attr_group[i]);
 		kfree(chips[i].sensors);
 		kfree(chips[i].cores);
-		for (j = 0; j < nr_cores; j++)
+		for (j = 0; j < chips[i].nr_cores; j++)
 			kfree(chips[i].cores[j].sensors);
 	}
 	kfree(chip_attr_group);
