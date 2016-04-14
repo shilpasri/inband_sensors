@@ -211,6 +211,16 @@ static int init_chip(void)
 		unsigned int id = cpu_to_chip_id(cpu);
 
 		if (prev_chip_id != id) {
+			bool id_added = false;
+			int j;
+
+			for (j = 0; j < nr_chips; j++)
+				if (chip[j] == id) {
+					id_added = true;
+					break;
+				}
+			if (id_added)
+				continue;
 			prev_chip_id = id;
 			chip[nr_chips++] = id;
 		}
