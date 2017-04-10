@@ -24,7 +24,7 @@
 
 typedef struct sensor {
 	char name[30];
-	char *unit;
+	const char *unit;
 	u64 paddr;
 	u64 vaddr;
 	u32 size;
@@ -322,6 +322,25 @@ out:
 	return rc;
 }
 
+void clear_chips(void)
+{
+	int i, j;
+
+	kfree(system_attrs);
+	kfree(chip_attrs);
+	kfree(system_sensors);
+	for (i = 0; i < nr_chips; i++) {
+		kfree(chip_attr_group[i]);
+		kfree(chips[i].sensors);
+		kfree(chips[i].cores);
+		for (j = 0; j < chips[i].nr_cores; j++)
+			kfree(chips[i].cores[j].sensors);
+	}
+	kfree(chip_attr_group);
+	kfree(chips);
+
+}
+
 static int sensor_init(void)
 {
 	int rc, i;
@@ -343,31 +362,23 @@ static int sensor_init(void)
 		if (rc) {
 			pr_info("Chip %d failed to create chip_attr_group\n",
 				chips[i].id);
-			goto out;
+			goto out_clean_kobj;
 		}
 	}
+
+	return rc;
+
+out_clean_kobj:
+	kobject_put(occ_sensor_kobj);
 out:
+	clear_chips();
 	return rc;
 }
 
 static void sensor_exit(void)
 {
-	int i, j;
-
 	kobject_put(occ_sensor_kobj);
-
-	kfree(system_attrs);
-	kfree(chip_attrs);
-	kfree(system_sensors);
-	for (i = 0; i < nr_chips; i++) {
-		kfree(chip_attr_group[i]);
-		kfree(chips[i].sensors);
-		kfree(chips[i].cores);
-		for (j = 0; j < chips[i].nr_cores; j++)
-			kfree(chips[i].cores[j].sensors);
-	}
-	kfree(chip_attr_group);
-	kfree(chips);
+	clear_chips();
 }
 
 module_init(sensor_init);
