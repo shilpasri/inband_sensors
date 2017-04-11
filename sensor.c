@@ -207,6 +207,29 @@ static int init_chip(void)
 	struct device_node *sensor_node, *node;
 	int rc = 0;
 
+	sensor_node = of_find_node_by_path("/occ_sensors");
+	if (!sensor_node) {
+		pr_info("Node occ_sensors not found\n");
+		return -EINVAL;
+	}
+
+	if (of_property_read_u32(sensor_node, "nr_system_sensors",
+				 &nr_system_sensors)) {
+		pr_info("nr_system_sensors not found\n");
+		rc = -EINVAL;
+	}
+
+	if (of_property_read_u32(sensor_node, "nr_chip_sensors",
+				 &nr_chip_sensors)) {
+		pr_info("nr_chip_sensors not found\n");
+		return -EINVAL;
+	}
+	if (of_property_read_u32(sensor_node, "nr_core_sensors",
+				 &nr_cores_sensors)) {
+		pr_info("nr_core_sensors not found\n");
+		return -EINVAL;
+	}
+
 	for_each_possible_cpu(cpu) {
 		unsigned int id = cpu_to_chip_id(cpu);
 
@@ -240,25 +263,6 @@ static int init_chip(void)
 			if (chips[i].id == cpu_to_chip_id(cpu))
 				ncpus++;
 		chips[i].nr_cores = ncpus / threads_per_core;
-	}
-
-	sensor_node = of_find_node_by_path("/occ_sensors");
-
-	if (of_property_read_u32(sensor_node, "nr_system_sensors",
-				 &nr_system_sensors)) {
-		pr_info("nr_system_sensors not found\n");
-		return -EINVAL;
-	}
-
-	if (of_property_read_u32(sensor_node, "nr_chip_sensors",
-				 &nr_chip_sensors)) {
-		pr_info("nr_chip_sensors not found\n");
-		return -EINVAL;
-	}
-	if (of_property_read_u32(sensor_node, "nr_core_sensors",
-				 &nr_cores_sensors)) {
-		pr_info("nr_core_sensors not found\n");
-		return -EINVAL;
 	}
 
 	system_sensors = kcalloc(nr_system_sensors, sizeof(sensor_t),
@@ -354,7 +358,7 @@ static int sensor_init(void)
 	rc = sysfs_create_group(occ_sensor_kobj, &system_attr_group);
 	if (rc) {
 		pr_info("Failed to create system attribute group\n");
-		goto out;
+		goto out_free_chips;
 	}
 
 	for (i = 0; i < nr_chips; i++) {
@@ -370,8 +374,9 @@ static int sensor_init(void)
 
 out_clean_kobj:
 	kobject_put(occ_sensor_kobj);
-out:
+out_free_chips:
 	clear_chips();
+out:
 	return rc;
 }
 
