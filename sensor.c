@@ -152,21 +152,18 @@ static int add_core_sensor(struct device_node *cnode, int chipid, int cid)
 	return 0;
 }
 
-static int add_chip_sensor(struct device_node *chip_node)
+static int add_chip_sensor(struct device_node *chip_node, int i)
 {
 	const __be32 *reg;
 	u32 len;
 	struct device_node *node;
-	int i, j, k, rc = 0;
-	u32 id = 0;
+	int j, k, rc = 0;
 
-	if (of_property_read_u32(chip_node, "ibm,chip-id", &id)) {
-		pr_err("Chip not found\n");
+	if (of_property_read_u32(chip_node, "ibm,chip-id", &chips[i].id)) {
+		pr_err("Chip id not found\n");
+		rc = -ENODEV;
 		goto out;
 	}
-	for (i = 0; i < nr_chips; i++)
-		if (chips[i].id == id)
-			break;
 
 	if (of_property_read_u64(chip_node, "reg", &chips[i].pbase)) {
 		pr_err("Chip Homer sensor offset not found\n");
@@ -201,9 +198,7 @@ out:
 
 static int init_chip(void)
 {
-	unsigned int chip[256];
-	unsigned int cpu, i, j, k, l;
-	unsigned int prev_chip_id = UINT_MAX;
+	unsigned int i, j, k, l;
 	struct device_node *sensor_node, *node;
 	int rc = 0;
 
@@ -230,24 +225,10 @@ static int init_chip(void)
 		return -EINVAL;
 	}
 
-	for_each_possible_cpu(cpu) {
-		unsigned int id = cpu_to_chip_id(cpu);
+	for_each_child_of_node(sensor_node, node)
+		if (!strcmp(node->name, "chip"))
+			nr_chips++;
 
-		if (prev_chip_id != id) {
-			bool id_added = false;
-			int j;
-
-			for (j = 0; j < nr_chips; j++)
-				if (chip[j] == id) {
-					id_added = true;
-					break;
-				}
-			if (id_added)
-				continue;
-			prev_chip_id = id;
-			chip[nr_chips++] = id;
-		}
-	}
 	pr_info("nr_chips %d\n", nr_chips);
 	chips = kcalloc(nr_chips, sizeof(struct chip), GFP_KERNEL);
 	if (!chips) {
@@ -255,14 +236,17 @@ static int init_chip(void)
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < nr_chips; i++) {
-		int ncpus = 0;
+	i = 0;
+	for_each_child_of_node(sensor_node, node) {
+		if (!strcmp(node->name, "chip")) {
+			struct device_node *cnode;
 
-		chips[i].id = chip[i];
-		for_each_possible_cpu(cpu)
-			if (chips[i].id == cpu_to_chip_id(cpu))
-				ncpus++;
-		chips[i].nr_cores = ncpus / threads_per_core;
+			for_each_child_of_node(node, cnode) {
+				if (!strcmp(cnode->name, "core"))
+					chips[i].nr_cores++;
+			}
+			i++;
+		}
 	}
 
 	system_sensors = kcalloc(nr_system_sensors, sizeof(sensor_t),
@@ -277,11 +261,14 @@ static int init_chip(void)
 							    GFP_KERNEL);
 	}
 
+	i = 0;
 	for_each_child_of_node(sensor_node, node) {
-		if (!strcmp(node->name, "chip"))
-			rc = add_chip_sensor(node);
-		else
+		if (!strcmp(node->name, "chip")) {
+			rc = add_chip_sensor(node, i);
+			i++;
+		} else {
 			rc = add_system_sensor(node);
+		}
 		if (rc)
 			goto out;
 	}
