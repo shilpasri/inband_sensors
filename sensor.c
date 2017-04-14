@@ -32,6 +32,7 @@ typedef struct sensor {
 } sensor_t;
 
 typedef struct core {
+	int pir;
 	sensor_t *sensors;
 } core_t;
 
@@ -130,69 +131,80 @@ static int add_system_sensor(struct device_node *snode)
 	return 0;
 }
 
-static int add_core_sensor(struct device_node *cnode, int chipid, int cid)
+static int get_logical_cpu(int hwcpu)
+{
+        int cpu;
+
+        for_each_possible_cpu(cpu)
+                if (get_hard_smp_processor_id(cpu) == hwcpu)
+                        return cpu;
+
+        return hwcpu;
+}
+
+static int add_core_sensor(struct device_node *cnode, core_t *core)
 {
 	const __be32 *reg;
 	struct device_node *node;
 	int i = 0, len;
-	unsigned int id;
 
-	if (of_property_read_u32(cnode, "ibm,core-id", &id)) {
+	if (of_property_read_u32(cnode, "ibm,core-id", &core->pir)) {
 		pr_info("Core_id not found");
 		return -EINVAL;
 	}
+
 	for_each_child_of_node(cnode, node) {
-		add_sensor(node, chips[chipid].cores[cid].sensors[i], len, reg);
-		sprintf(chips[chipid].cores[cid].sensors[i].name, "core%d-%s",
-			cid+1, node->name);
-		chips[chipid].cores[cid].sensors[i].attr.attr.name =
-			chips[chipid].cores[cid].sensors[i].name;
+		add_sensor(node, core->sensors[i], len, reg);
 		i++;
 	}
+
 	return 0;
 }
 
-static int add_chip_sensor(struct device_node *chip_node, int i)
+static int add_chip_sensor(struct device_node *chip_node, struct chip *chip)
 {
 	const __be32 *reg;
 	u32 len;
 	struct device_node *node;
-	int j, k, rc = 0;
+	int j, k;
 
-	if (of_property_read_u32(chip_node, "ibm,chip-id", &chips[i].id)) {
+	if (of_property_read_u32(chip_node, "ibm,chip-id", &chip->id)) {
 		pr_err("Chip id not found\n");
-		rc = -ENODEV;
-		goto out;
+		return -ENODEV;
 	}
 
-	if (of_property_read_u64(chip_node, "reg", &chips[i].pbase)) {
+	if (of_property_read_u64(chip_node, "reg", &chip->pbase)) {
 		pr_err("Chip Homer sensor offset not found\n");
-		rc = -ENODEV;
-		goto out;
+		return -ENODEV;
 	}
 
-	chips[i].vbase = (u64)phys_to_virt(chips[i].pbase);
-	pr_info("i = %d Chip %d sensor pbase= %lx, vbase = %lx (%lx)\n", i,
-		 chips[i].id, (unsigned long)chips[i].pbase,
-		 (unsigned long)chips[i].vbase, BE(chips[i].vbase+4, 16));
+	chip->vbase = (u64)phys_to_virt(chip->pbase);
+	pr_info("Chip %d sensor pbase= %lx, vbase = %lx (%lx)\n", chip->id,
+		(unsigned long)chip->pbase, (unsigned long)chip->vbase,
+		BE(chip->vbase + 4, 16));
 
 	j = k = 0;
 	for_each_child_of_node(chip_node, node) {
 		if (!strcmp(node->name, "core")) {
-			add_core_sensor(node, i, k++);
+			add_core_sensor(node, &chip->cores[k]);
+			sprintf(chip->cores[k].sensors[0].name, "core%d",
+				get_logical_cpu(chip->cores[k].pir));
+				chip->cores[k].sensors[0].attr.attr.name =
+					chip->cores[k].sensors[0].name;
+			k++;
 			continue;
 		}
-		add_sensor(node, chips[i].sensors[j], len, reg);
-		sprintf(chips[i].sensors[j].name, "%s", node->name);
-		chips[i].sensors[j].attr.attr.name = chips[i].sensors[j].name;
+		add_sensor(node, chip->sensors[j], len, reg);
+		sprintf(chip->sensors[j].name, "%s", node->name);
+		chip->sensors[j].attr.attr.name = chip->sensors[j].name;
 		if (!strcmp(node->name, "power"))
-			chip_power_addr = chips[i].sensors[j].vaddr;
+			chip_power_addr = chip->sensors[j].vaddr;
 		if (!strcmp(node->name, "chip-energy"))
-			chip_energy_addr = chips[i].sensors[j].vaddr;
+			chip_energy_addr = chip->sensors[j].vaddr;
 		j++;
 	}
-out:
-	return rc;
+
+	return 0;
 }
 
 
@@ -200,29 +212,30 @@ static int init_chip(void)
 {
 	unsigned int i, j, k, l;
 	struct device_node *sensor_node, *node;
-	int rc = 0;
+	int rc = -EINVAL;
 
 	sensor_node = of_find_node_by_path("/occ_sensors");
 	if (!sensor_node) {
 		pr_info("Node occ_sensors not found\n");
-		return -EINVAL;
+		return rc;
 	}
 
 	if (of_property_read_u32(sensor_node, "nr_system_sensors",
 				 &nr_system_sensors)) {
 		pr_info("nr_system_sensors not found\n");
-		rc = -EINVAL;
+		goto out;
 	}
 
 	if (of_property_read_u32(sensor_node, "nr_chip_sensors",
 				 &nr_chip_sensors)) {
 		pr_info("nr_chip_sensors not found\n");
-		return -EINVAL;
+		goto out;
 	}
+
 	if (of_property_read_u32(sensor_node, "nr_core_sensors",
 				 &nr_cores_sensors)) {
 		pr_info("nr_core_sensors not found\n");
-		return -EINVAL;
+		goto out;
 	}
 
 	for_each_child_of_node(sensor_node, node)
@@ -233,7 +246,8 @@ static int init_chip(void)
 	chips = kcalloc(nr_chips, sizeof(struct chip), GFP_KERNEL);
 	if (!chips) {
 		pr_info("Out of memory\n");
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto out;
 	}
 
 	i = 0;
@@ -254,7 +268,8 @@ static int init_chip(void)
 	for (i = 0; i < nr_chips; i++) {
 		chips[i].sensors = kcalloc(nr_chip_sensors, sizeof(sensor_t),
 					   GFP_KERNEL);
-		chips[i].cores = kcalloc(chips[i].nr_cores, sizeof(core_t), GFP_KERNEL);
+		chips[i].cores = kcalloc(chips[i].nr_cores, sizeof(core_t),
+					 GFP_KERNEL);
 		for (j = 0; j < chips[i].nr_cores; j++)
 			chips[i].cores[j].sensors = kcalloc(nr_cores_sensors,
 							    sizeof(sensor_t),
@@ -264,7 +279,7 @@ static int init_chip(void)
 	i = 0;
 	for_each_child_of_node(sensor_node, node) {
 		if (!strcmp(node->name, "chip")) {
-			rc = add_chip_sensor(node, i);
+			rc = add_chip_sensor(node, &chips[i]);
 			i++;
 		} else {
 			rc = add_system_sensor(node);
@@ -273,14 +288,18 @@ static int init_chip(void)
 			goto out;
 	}
 
-	system_attrs = kcalloc(nr_system_sensors, sizeof(struct attribute *),
+	system_attrs = kcalloc(nr_system_sensors + 1, sizeof(struct attribute *),
 			       GFP_KERNEL);
-	chip_attrs = kcalloc(nr_chip_sensors, sizeof(struct attribute **),
+	chip_attrs = kcalloc(nr_chips + 1, sizeof(struct attribute **),
 			     GFP_KERNEL);
-	for (i = 0; i < nr_chips; i++)
-		chip_attrs[i] = kcalloc(
-				nr_chip_sensors + nr_cores_sensors * chips[i].nr_cores,
-				sizeof(struct attribute *), GFP_KERNEL);
+
+	for (i = 0; i < nr_chips; i++) {
+		int size = nr_chip_sensors +
+			   nr_cores_sensors * chips[i].nr_cores + 1;
+
+		chip_attrs[i] = kcalloc(size, sizeof(struct attribute *),
+					GFP_KERNEL);
+	}
 
 	for (i = 0; i < nr_system_sensors; i++)
 		system_attrs[i] = &system_sensors[i].attr.attr;
@@ -288,17 +307,17 @@ static int init_chip(void)
 
 	for (j = 0; j < nr_chips; j++) {
 		i = 0;
-		for (k = 0; k < nr_chip_sensors; k++, i++)
-			chip_attrs[j][i] = &chips[j].sensors[k].attr.attr;
+		for (k = 0; k < nr_chip_sensors; k++)
+			chip_attrs[j][i++] = &chips[j].sensors[k].attr.attr;
 		for (k = 0; k < chips[j].nr_cores; k++)
-			for (l = 0; l < nr_cores_sensors; l++, i++)
-				chip_attrs[j][i] =
+			for (l = 0; l < nr_cores_sensors; l++)
+				chip_attrs[j][i++] =
 					&chips[j].cores[k].sensors[l].attr.attr;
 		chip_attrs[j][i] = NULL;
 	}
 	chip_attrs[j] = NULL;
 
-	chip_attr_group = kcalloc(nr_chips, sizeof(struct attribute_group *),
+	chip_attr_group = kcalloc(nr_chips + 1, sizeof(struct attribute_group *),
 				  GFP_KERNEL);
 	for (i = 0; i < nr_chips; i++) {
 		chip_attr_group[i] = kzalloc(sizeof(struct attribute_group),
@@ -309,7 +328,9 @@ static int init_chip(void)
 	}
 	chip_attr_group[i] = NULL;
 	system_attr_group.attrs = system_attrs;
+
 out:
+	of_node_put(sensor_node);
 	return rc;
 }
 
