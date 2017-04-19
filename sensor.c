@@ -131,18 +131,7 @@ static int add_system_sensor(struct device_node *snode)
 	return 0;
 }
 
-static int get_logical_cpu(int hwcpu)
-{
-        int cpu;
-
-        for_each_possible_cpu(cpu)
-                if (get_hard_smp_processor_id(cpu) == hwcpu)
-                        return cpu;
-
-        return hwcpu;
-}
-
-static int add_core_sensor(struct device_node *cnode, core_t *core)
+static int add_core_sensor(struct device_node *cnode, core_t *core, int cid)
 {
 	const __be32 *reg;
 	struct device_node *node;
@@ -155,6 +144,9 @@ static int add_core_sensor(struct device_node *cnode, core_t *core)
 
 	for_each_child_of_node(cnode, node) {
 		add_sensor(node, core->sensors[i], len, reg);
+		sprintf(core->sensors[i].name, "core%d-%s", cid + 1,
+			node->name);
+		core->sensors[i].attr.attr.name = core->sensors[i].name;
 		i++;
 	}
 
@@ -186,11 +178,7 @@ static int add_chip_sensor(struct device_node *chip_node, struct chip *chip)
 	j = k = 0;
 	for_each_child_of_node(chip_node, node) {
 		if (!strcmp(node->name, "core")) {
-			add_core_sensor(node, &chip->cores[k]);
-			sprintf(chip->cores[k].sensors[0].name, "core%d",
-				get_logical_cpu(chip->cores[k].pir));
-				chip->cores[k].sensors[0].attr.attr.name =
-					chip->cores[k].sensors[0].name;
+			add_core_sensor(node, &chip->cores[k], k);
 			k++;
 			continue;
 		}
